@@ -12,6 +12,12 @@ app.use(cors({
   credentials: true
 }));
 
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+
 // Body parser - parse JSON bodies
 app.use(express.json());
 
