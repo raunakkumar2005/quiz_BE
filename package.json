@@ -1,0 +1,25 @@
+{
+  "name": "quiz-backend",
+  "version": "1.0.0",
+  "description": "AI-powered quiz system backend",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test:api": "node test-api.cjs",
+    "test:auth": "node test-auth.cjs",
+    "test:ai": "node test-ai.cjs",
+    "test": "node test-api.cjs && node test-auth.cjs",
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.0.3",
+    "openai": "^4.24.1"
+  }
+}
