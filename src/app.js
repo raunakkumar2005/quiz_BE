@@ -1,9 +1,16 @@
 import express from 'express';
+import cors from 'cors';
 import quizRoutes from './routes/quizRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
+
+// CORS - allow all origins
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 
 // Body parser - parse JSON bodies
 app.use(express.json());
