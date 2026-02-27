@@ -5,6 +5,12 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+
 // Body parser - parse JSON bodies
 app.use(express.json());
 
