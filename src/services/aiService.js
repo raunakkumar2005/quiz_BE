@@ -1,7 +1,8 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { SOURCE } from '../utils/constants.js';
-import { AppError } from '../middleware/errorHandler.js';
-import dotenv from 'dotenv';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { SOURCE } from "../utils/constants.js";
+import { AppError } from "../middleware/errorHandler.js";
+import dotenv from "dotenv";
+
 dotenv.config();
 
 if (!process.env.GEMINI_API_KEY) {
@@ -10,43 +11,94 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-/**
- * small helper to avoid rate limits
- */
+/* ---------------- RATE LIMIT GUARD ---------------- */
+
+let lastRequestTime = 0;
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Build the AI prompt
- */
-const buildPrompt = (exam, subject, topic, difficulty, count) => {
-  return `Generate ${count} multiple choice questions for ${exam} exam, subject: ${subject}, topic: ${topic}, difficulty: ${difficulty}.
+const throttle = async () => {
+  const MIN_DELAY = 1200; // ~1 request/sec safe for free tier
 
-Requirements:
-- Each question must have exactly 4 options (A, B, C, D)
-- Only ONE correct answer per question
-- Explanation must be under 40 words
-- Return ONLY valid JSON array, no markdown, no extra text
-- Each question object must have: question_text, option_a, option_b, option_c, option_d, correct_option, explanation, difficulty, source
+  const now = Date.now();
+  const diff = now - lastRequestTime;
+
+  if (diff < MIN_DELAY) {
+    await sleep(MIN_DELAY - diff);
+  }
+
+  lastRequestTime = Date.now();
+};
+
+/* ---------------- EXPONENTIAL BACKOFF ---------------- */
+
+const getBackoffDelay = (attempt) => {
+  const base = 2000;
+  const jitter = Math.random() * 1000;
+  return base * Math.pow(2, attempt) + jitter;
+};
+
+/* ---------------- PROMPT BUILDER ---------------- */
+
+const buildPrompt = (exam, subject, topic, difficulty, count) => {
+  return `Generate ${count} multiple choice questions.
+
+Exam: ${exam}
+Subject: ${subject}
+Topic: ${topic}
+Difficulty: ${difficulty}
+
+Rules:
+- Exactly 4 options (A,B,C,D)
+- Only one correct option
+- Explanation under 40 words
+- Return ONLY valid JSON
+- No markdown
+- No extra text
 
 JSON format:
+
 [
-  {
-    "question_text": "",
-    "option_a": "",
-    "option_b": "",
-    "option_c": "",
-    "option_d": "",
-    "correct_option": "A|B|C|D",
-    "explanation": "",
-    "difficulty": "${difficulty}",
-    "source": "AI"
-  }
+{
+"question_text":"",
+"option_a":"",
+"option_b":"",
+"option_c":"",
+"option_d":"",
+"correct_option":"A",
+"explanation":"",
+"difficulty":"${difficulty}",
+"source":"AI"
+}
 ]`;
 };
 
-/**
- * Validate AI response
- */
+/* ---------------- JSON PARSER ---------------- */
+
+const extractJsonFromResponse = (text) => {
+  try {
+    const cleaned = text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+
+    if (start === -1 || end === -1) {
+      throw new Error("JSON not found");
+    }
+
+    const jsonString = cleaned.substring(start, end + 1);
+
+    return JSON.parse(jsonString);
+  } catch (err) {
+    throw new AppError("Failed to parse AI response JSON", 500);
+  }
+};
+
+/* ---------------- VALIDATION ---------------- */
+
 const validateAIResponse = (questions) => {
   if (!Array.isArray(questions)) return false;
 
@@ -57,10 +109,7 @@ const validateAIResponse = (questions) => {
       !q.option_b ||
       !q.option_c ||
       !q.option_d ||
-      !q.correct_option ||
-      !['A', 'B', 'C', 'D'].includes(q.correct_option) ||
-      !q.difficulty ||
-      !q.source
+      !["A", "B", "C", "D"].includes(q.correct_option)
     ) {
       return false;
     }
@@ -69,29 +118,8 @@ const validateAIResponse = (questions) => {
   return true;
 };
 
-/**
- * Extract JSON safely from model response
- */
-const extractJsonFromResponse = (text) => {
-  try {
-    const start = text.indexOf('[');
-    const end = text.lastIndexOf(']');
+/* ---------------- AI GENERATION ---------------- */
 
-    if (start === -1 || end === -1) {
-      throw new Error();
-    }
-
-    const jsonString = text.substring(start, end + 1);
-
-    return JSON.parse(jsonString);
-  } catch {
-    throw new Error('No valid JSON found in response');
-  }
-};
-
-/**
- * Generate questions using Gemini
- */
 export const generateQuestionsWithAI = async (
   exam,
   subject,
@@ -99,32 +127,36 @@ export const generateQuestionsWithAI = async (
   difficulty,
   count
 ) => {
+  const models = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash"
+  ];
 
-  const models = ['gemini-2.0-flash-lite'];
   let lastError = null;
 
   for (const modelName of models) {
-
     try {
-
-      console.log(`Trying model: ${modelName}`);
+      console.log(`🤖 Trying model: ${modelName}`);
 
       const model = genAI.getGenerativeModel({ model: modelName });
 
       const prompt = buildPrompt(exam, subject, topic, difficulty, count);
 
+      await throttle();
+
       const result = await model.generateContent(prompt);
 
-      const content = result.response?.text();
+      const text = result?.response?.text();
 
-      if (!content) {
-        throw new AppError('Empty response from AI', 500);
+      if (!text) {
+        throw new AppError("Empty response from AI", 500);
       }
 
-      const questions = extractJsonFromResponse(content);
+      const questions = extractJsonFromResponse(text);
 
       if (!validateAIResponse(questions)) {
-        throw new AppError('Invalid question structure in AI response', 500);
+        throw new AppError("Invalid AI response structure", 500);
       }
 
       const enrichedQuestions = questions.map((q) => ({
@@ -132,55 +164,48 @@ export const generateQuestionsWithAI = async (
         exam,
         subject,
         topic,
-        source: SOURCE.AI
+        source: SOURCE.AI,
       }));
 
-      console.log(`✅ Questions generated successfully`);
+      console.log("✅ Questions generated");
 
       return enrichedQuestions;
-
     } catch (error) {
-
       lastError = error;
 
-      const msg = error.message || '';
+      const msg = error?.message || "";
 
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-        console.log('Rate limit reached. Waiting 5 seconds...');
-        await sleep(5000);
+      console.log(`⚠️ Model ${modelName} failed:`, msg.slice(0, 120));
+
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        console.log("⏳ Rate limit hit. Switching model...");
         continue;
       }
 
-      if (msg.includes('API_KEY') || msg.includes('permission')) {
-        throw new AppError('Invalid Gemini API key', 500);
+      if (msg.includes("API_KEY") || msg.includes("permission")) {
+        throw new AppError("Invalid Gemini API key", 401);
       }
-
-      console.log(`Model ${modelName} failed:`, msg.substring(0, 120));
     }
   }
 
-  throw lastError || new AppError('All Gemini models failed', 500);
+  throw lastError || new AppError("All Gemini models failed", 500);
 };
 
-/**
- * Retry wrapper
- */
+/* ---------------- RETRY WRAPPER ---------------- */
+
 export const generateQuestionsWithRetry = async (
   exam,
   subject,
   topic,
   difficulty,
   count,
-  maxRetries = 3
+  maxRetries = 4
 ) => {
-
   let lastError;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-
-      console.log(`AI Generation Attempt ${attempt}/${maxRetries}`);
+      console.log(`🚀 AI generation attempt ${attempt + 1}/${maxRetries}`);
 
       return await generateQuestionsWithAI(
         exam,
@@ -189,45 +214,42 @@ export const generateQuestionsWithRetry = async (
         difficulty,
         count
       );
-
     } catch (error) {
-
       lastError = error;
 
-      const msg = error.message || '';
+      const msg = error?.message || "";
 
-      console.error(`Attempt ${attempt} failed:`, msg);
+      console.error("❌ Attempt failed:", msg);
 
       if (
-        msg.includes('API key') ||
-        msg.includes('permission') ||
+        msg.includes("API key") ||
+        msg.includes("permission") ||
         error.statusCode === 401
       ) {
         throw error;
       }
 
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-
-        if (attempt === maxRetries) {
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        if (attempt === maxRetries - 1) {
           throw new AppError(
-            'Gemini free-tier quota exhausted. Please try again later.',
+            "Gemini quota exhausted. Try again later.",
             429
           );
         }
 
-        const wait = attempt * 4000;
+        const delay = getBackoffDelay(attempt);
 
-        console.log(`Waiting ${wait}ms before retry...`);
+        console.log(`⏳ Waiting ${delay}ms before retry`);
 
-        await sleep(wait);
+        await sleep(delay);
       }
     }
   }
 
-  throw lastError || new AppError('Failed to generate questions', 500);
+  throw lastError || new AppError("AI generation failed", 500);
 };
 
 export default {
   generateQuestionsWithAI,
-  generateQuestionsWithRetry
+  generateQuestionsWithRetry,
 };
