@@ -100,7 +100,7 @@ export const generateQuestionsWithAI = async (
   count
 ) => {
 
-  const models = ['gemini-1.5-flash'];
+  const models = ['gemini-2.0-flash-lite'];
   let lastError = null;
 
   for (const modelName of models) {
