@@ -2,7 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import quizRoutes from './routes/quizRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import communityRoutes from './routes/communityRoutes.js';
+import postRoutes from './routes/postRoutes.js';
+import commentRoutes from './routes/commentRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { authenticate } from './middleware/auth.js';
+import communityController from './controllers/communityController.js';
+import { asyncHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
@@ -24,6 +30,13 @@ app.use(express.json());
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/quizzes', quizRoutes);
+app.use('/api/communities', communityRoutes);
+app.use('/api/posts', postRoutes);
+app.use('/api/comments', commentRoutes);
+
+// Feed endpoints
+app.get('/api/feed', authenticate, asyncHandler(communityController.getUserFeed));
+app.get('/api/trending', asyncHandler(communityController.getTrendingPosts));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
